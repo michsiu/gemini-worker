@@ -1,0 +1,7 @@
+name = "gemini-worker"
+main = "worker.js"
+compatibility_date = "2026-05-10"
+
+[[kv_namespaces]]
+binding = "GEMINI_CLI_KV"
+id = "e1f1c0a8b0e84d9bb3e4e0b3e4e0b3e4"
