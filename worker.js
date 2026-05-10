@@ -1,8 +1,4 @@
-// Gemini CLI OpenAI Worker - 精简版
-// 部署后访问 https://你的worker.workers.dev/v1/models 测试
-
-const OAUTH_CLIENT_ID = "";
-const OAUTH_CLIENT_SECRET = "";
+// Gemini CLI OpenAI Worker
 const OAUTH_REFRESH_URL = "https://oauth2.googleapis.com/token";
 const CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com";
 const KV_TOKEN_KEY = "oauth_token_cache";
@@ -15,7 +11,7 @@ const MODELS = {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    
+
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -39,7 +35,7 @@ export default {
 
     if (url.pathname === "/v1/models" && request.method === "GET") {
       const data = Object.keys(MODELS).map(id => ({
-        id, object: "model", created: Math.floor(Date.now()/1000), owned_by: "google"
+        id, object: "model", created: Math.floor(Date.now() / 1000), owned_by: "google"
       }));
       return Response.json({ object: "list", data });
     }
@@ -94,8 +90,8 @@ async function getAccessToken(env) {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: OAUTH_CLIENT_ID,
-      client_secret: OAUTH_CLIENT_SECRET,
+      client_id: env.OAUTH_CLIENT_ID,
+      client_secret: env.OAUTH_CLIENT_SECRET,
       refresh_token: creds.refresh_token,
       grant_type: "refresh_token"
     })
