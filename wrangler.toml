@@ -5,3 +5,10 @@ compatibility_date = "2026-05-10"
 [[kv_namespaces]]
 binding = "GEMINI_CLI_KV"
 id = "70d7f780ee034c5d98ca109a2da0611a"
+
+[observability]
+enabled = true
+
+  [observability.logs]
+  invocation_logs = true
+  head_sampling_rate = 1
