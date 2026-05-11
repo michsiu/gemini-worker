@@ -1,8 +1,5 @@
-// Gemini CLI OpenAI Worker - 完整终版
-const OAUTH_REFRESH_URL = "https://oauth2.googleapis.com/token";
+// Gemini CLI OpenAI Worker - 调试版
 const CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com";
-const KV_TOKEN_KEY = "oauth_token_cache";
-const MY_PROJECT_ID = "gen-lang-client-0942663164";
 
 const MODELS = {
   "gemini-2.5-pro": { maxTokens: 65536, contextWindow: 1048576 },
@@ -13,31 +10,10 @@ const MODELS = {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization"
-        }
-      });
-    }
-
-    if (url.pathname === "/health") {
-      return Response.json({ status: "ok" });
-    }
-
-    if (env.OPENAI_API_KEY) {
-      const auth = request.headers.get("Authorization");
-      if (!auth || auth !== `Bearer ${env.OPENAI_API_KEY}`) {
-        return Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
-      }
-    }
 
     if (url.pathname === "/v1/models" && request.method === "GET") {
       const data = Object.keys(MODELS).map(id => ({
-        id, object: "model", created: Math.floor(Date.now() / 1000), owned_by: "google"
+        id, object: "model", created: Math.floor(Date.now()/1000), owned_by: "google"
       }));
       return Response.json({ object: "list", data });
     }
@@ -47,15 +23,49 @@ export default {
         const body = await request.json();
         const model = body.model || "gemini-2.5-flash";
         const messages = body.messages || [];
-        const stream = body.stream !== false;
 
         if (!messages.length) {
-          return Response.json({ error: "messages is a required field" }, { status: 400 });
+          return Response.json({ error: "messages is required" }, { status: 400 });
         }
 
-        const accessToken = await getAccessToken(env);
-        const projectId = MY_PROJECT_ID;
+        // 1. 刷新 Token 两次以确保拿到最新的绑定信息
+        let accessToken, projData;
+        try {
+          const creds = JSON.parse(env.GCP_SERVICE_ACCOUNT);
+          
+          // 第一次刷新
+          const refreshResp = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              client_id: env.OAUTH_CLIENT_ID,
+              client_secret: env.OAUTH_CLIENT_SECRET,
+              refresh_token: creds.refresh_token,
+              grant_type: "refresh_token"
+            })
+          });
+          const refreshData = await refreshResp.json();
+          if (!refreshResp.ok) throw new Error(JSON.stringify(refreshData));
+          accessToken = refreshData.access_token;
+
+          // 立即请求项目信息
+          const projResp = await fetch(`${CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${accessToken}`
+            },
+            body: JSON.stringify({ cloudaicompanionProject: undefined })
+          });
+          projData = await projResp.json();
+          
+        } catch (e) {
+          return Response.json({ error: "Token/Project error: " + e.message }, { status: 500 });
+        }
+
+        const discoveredProject = projData.cloudaicompanionProject || "none";
         
+        // 2. 使用发现的项目 ID 测试调用
         const contents = messages.map(msg => ({
           role: msg.role === "assistant" ? "model" : "user",
           parts: [{ text: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content) }]
@@ -67,77 +77,25 @@ export default {
             "Content-Type": "application/json",
             Authorization: `Bearer ${accessToken}`
           },
-          body: JSON.stringify({ model, project: projectId, request: { contents } })
+          body: JSON.stringify({ model, project: discoveredProject, request: { contents } })
         });
 
-        if (!geminiResp.ok) {
-          const errText = await geminiResp.text();
-          return Response.json({
-            error: `Gemini API error (${geminiResp.status}): ${errText.substring(0, 500)}`
-          }, { status: 500 });
-        }
+        const respText = await geminiResp.clone().text();
 
-        return new Response(geminiResp.body, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Access-Control-Allow-Origin": "*"
+        // 直接返回所有调试信息，方便你查看
+        return Response.json({
+          debug: {
+            project_used_in_call: discoveredProject,
+            gemini_status: geminiResp.status,
+            gemini_first_400_chars: respText.substring(0, 400)
           }
         });
+
       } catch (e) {
-        return Response.json({
-          error: "Error: " + (e.message || String(e))
-        }, { status: 500 });
+        return Response.json({ error: "Uncaught error: " + (e.message || String(e)) }, { status: 500 });
       }
     }
 
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 };
-
-async function getAccessToken(env) {
-  let creds;
-  try {
-    creds = JSON.parse(env.GCP_SERVICE_ACCOUNT);
-  } catch (e) {
-    throw new Error("GCP_SERVICE_ACCOUNT parse failed: " + e.message);
-  }
-
-  try {
-    const cached = await env.GEMINI_CLI_KV.get(KV_TOKEN_KEY, "json");
-    if (cached && cached.expiry_date && cached.expiry_date > Date.now() + 300000) {
-      return cached.access_token;
-    }
-  } catch (e) {}
-
-  if (creds.expiry_date && creds.expiry_date > Date.now() + 300000) {
-    return creds.access_token;
-  }
-
-  const refreshResp = await fetch(OAUTH_REFRESH_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.OAUTH_CLIENT_ID,
-      client_secret: env.OAUTH_CLIENT_SECRET,
-      refresh_token: creds.refresh_token,
-      grant_type: "refresh_token"
-    })
-  });
-
-  const refreshData = await refreshResp.json();
-
-  if (!refreshResp.ok) {
-    throw new Error("Token refresh failed: " + JSON.stringify(refreshData));
-  }
-
-  const newExpiry = Date.now() + (refreshData.expires_in || 3600) * 1000;
-  try {
-    await env.GEMINI_CLI_KV.put(KV_TOKEN_KEY, JSON.stringify({
-      access_token: refreshData.access_token,
-      expiry_date: newExpiry
-    }), { expirationTtl: 3300 });
-  } catch (e) {}
-
-  return refreshData.access_token;
-}
