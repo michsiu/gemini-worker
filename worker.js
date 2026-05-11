@@ -2,6 +2,7 @@ export default {
   async fetch(request) {
     const html = `
     <!DOCTYPE html>
+<meta charset="utf-8">
     <html>
     <head><title>我的小应用</title></head>
     <body>
